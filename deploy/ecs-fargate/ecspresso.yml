@@ -1,0 +1,6 @@
+region: "{{ must_env `AWS_REGION` }}"
+cluster: shumoku-cluster
+service: shumoku
+service_definition: ecs-service-def.json
+task_definition: ecs-task-def.json
+timeout: 10m0s

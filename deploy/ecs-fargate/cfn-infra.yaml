@@ -1,22 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Shumoku Server - ECS Fargate deployment
+Description: Shumoku - ECS Fargate infrastructure (ALB, EFS, SG, IAM, Logs)
 
-# ==================================================
-# Parameters
-# ==================================================
 Parameters:
   AppName:
     Type: String
     Default: shumoku
-    Description: Application name (used for resource naming)
-
-  ImageUri:
-    Type: String
-    Description: ECR image URI (e.g. 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/shumoku:latest)
 
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Description: VPC ID
 
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
@@ -26,32 +17,6 @@ Parameters:
     Type: Number
     Default: 8080
 
-  DesiredCount:
-    Type: Number
-    Default: 1
-
-  TaskCpu:
-    Type: String
-    Default: '256'
-    AllowedValues: ['256', '512', '1024', '2048', '4096']
-
-  TaskMemory:
-    Type: String
-    Default: '512'
-    AllowedValues: ['512', '1024', '2048', '4096', '8192', '16384', '30720']
-
-  EnableEFS:
-    Type: String
-    Default: 'true'
-    AllowedValues: ['true', 'false']
-    Description: Enable EFS for persistent /data volume
-
-Conditions:
-  UseEFS: !Equals [!Ref EnableEFS, 'true']
-
-# ==================================================
-# Resources
-# ==================================================
 Resources:
 
   # ---------- ECS Cluster ----------
@@ -89,6 +54,18 @@ Resources:
             Principal:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ecs-exec
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssmmessages:CreateControlChannel
+                  - ssmmessages:CreateDataChannel
+                  - ssmmessages:OpenControlChannel
+                  - ssmmessages:OpenDataChannel
+                Resource: '*'
 
   # ---------- Security Groups ----------
   AlbSg:
@@ -115,7 +92,6 @@ Resources:
 
   EfsSg:
     Type: AWS::EC2::SecurityGroup
-    Condition: UseEFS
     Properties:
       GroupDescription: EFS mount target security group
       VpcId: !Ref VpcId
@@ -125,10 +101,9 @@ Resources:
           ToPort: 2049
           SourceSecurityGroupId: !Ref ServiceSg
 
-  # ---------- EFS (persistent /data) ----------
+  # ---------- EFS ----------
   FileSystem:
     Type: AWS::EFS::FileSystem
-    Condition: UseEFS
     Properties:
       PerformanceMode: generalPurpose
       Encrypted: true
@@ -138,7 +113,6 @@ Resources:
 
   MountTargetA:
     Type: AWS::EFS::MountTarget
-    Condition: UseEFS
     Properties:
       FileSystemId: !Ref FileSystem
       SubnetId: !Select [0, !Ref SubnetIds]
@@ -146,7 +120,6 @@ Resources:
 
   MountTargetB:
     Type: AWS::EFS::MountTarget
-    Condition: UseEFS
     Properties:
       FileSystemId: !Ref FileSystem
       SubnetId: !Select [1, !Ref SubnetIds]
@@ -154,7 +127,6 @@ Resources:
 
   EfsAccessPoint:
     Type: AWS::EFS::AccessPoint
-    Condition: UseEFS
     Properties:
       FileSystemId: !Ref FileSystem
       PosixUser:
@@ -207,99 +179,37 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-  # ---------- Task Definition ----------
-  TaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: !Ref AppName
-      Cpu: !Ref TaskCpu
-      Memory: !Ref TaskMemory
-      NetworkMode: awsvpc
-      RequiresCompatibilities: [FARGATE]
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt TaskRole.Arn
-      RuntimePlatform:
-        CpuArchitecture: X86_64
-        OperatingSystemFamily: LINUX
-      Volumes:
-        - !If
-          - UseEFS
-          - Name: shumoku-data
-            EFSVolumeConfiguration:
-              FilesystemId: !Ref FileSystem
-              TransitEncryption: ENABLED
-              AuthorizationConfig:
-                AccessPointId: !Ref EfsAccessPoint
-                IAM: DISABLED
-          - !Ref AWS::NoValue
-      ContainerDefinitions:
-        - Name: !Ref AppName
-          Image: !Ref ImageUri
-          Essential: true
-          PortMappings:
-            - ContainerPort: !Ref ContainerPort
-              Protocol: tcp
-          Environment:
-            - Name: PORT
-              Value: '8080'
-            - Name: HOST
-              Value: 0.0.0.0
-            - Name: DATA_DIR
-              Value: /data
-          MountPoints:
-            - !If
-              - UseEFS
-              - SourceVolume: shumoku-data
-                ContainerPath: /data
-              - !Ref AWS::NoValue
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref LogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: ecs
-          HealthCheck:
-            Command: ['CMD-SHELL', 'curl -f http://localhost:8080/api/health || exit 1']
-            Interval: 30
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 10
-          LinuxParameters:
-            InitProcessEnabled: true
-
-  # ---------- ECS Service ----------
-  Service:
-    Type: AWS::ECS::Service
-    DependsOn: Listener
-    Properties:
-      ServiceName: !Ref AppName
-      Cluster: !Ref Cluster
-      TaskDefinition: !Ref TaskDefinition
-      DesiredCount: !Ref DesiredCount
-      LaunchType: FARGATE
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: ENABLED
-          Subnets: !Ref SubnetIds
-          SecurityGroups: [!Ref ServiceSg]
-      LoadBalancers:
-        - ContainerName: !Ref AppName
-          ContainerPort: !Ref ContainerPort
-          TargetGroupArn: !Ref TargetGroup
-      DeploymentConfiguration:
-        MinimumHealthyPercent: 100
-        MaximumPercent: 200
-      EnableExecuteCommand: true
-
-# ==================================================
-# Outputs
-# ==================================================
 Outputs:
   ClusterName:
     Value: !Ref Cluster
+    Export:
+      Name: !Sub '${AppName}-cluster-name'
 
-  ServiceName:
-    Value: !GetAtt Service.Name
+  ServiceSgId:
+    Value: !Ref ServiceSg
+    Export:
+      Name: !Sub '${AppName}-service-sg-id'
+
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AppName}-target-group-arn'
+
+  EfsFileSystemId:
+    Value: !Ref FileSystem
+    Export:
+      Name: !Sub '${AppName}-efs-id'
+
+  EfsAccessPointId:
+    Value: !Ref EfsAccessPoint
+    Export:
+      Name: !Sub '${AppName}-efs-ap-id'
+
+  Subnet1:
+    Value: !Select [0, !Ref SubnetIds]
+
+  Subnet2:
+    Value: !Select [1, !Ref SubnetIds]
 
   AlbDnsName:
     Value: !GetAtt Alb.DNSName

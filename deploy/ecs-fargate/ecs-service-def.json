@@ -1,0 +1,30 @@
+{
+  "deploymentConfiguration": {
+    "minimumHealthyPercent": 100,
+    "maximumPercent": 200
+  },
+  "desiredCount": 1,
+  "enableExecuteCommand": true,
+  "launchType": "FARGATE",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "assignPublicIp": "ENABLED",
+      "securityGroups": [
+        "{{ must_env `SERVICE_SG_ID` }}"
+      ],
+      "subnets": [
+        "{{ must_env `SUBNET_1` }}",
+        "{{ must_env `SUBNET_2` }}"
+      ]
+    }
+  },
+  "loadBalancers": [
+    {
+      "containerName": "shumoku",
+      "containerPort": 8080,
+      "targetGroupArn": "{{ must_env `TARGET_GROUP_ARN` }}"
+    }
+  ],
+  "platformVersion": "LATEST",
+  "schedulingStrategy": "REPLICA"
+}

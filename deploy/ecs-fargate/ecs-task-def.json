@@ -1,0 +1,68 @@
+{
+  "family": "shumoku",
+  "cpu": "256",
+  "memory": "512",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "executionRoleArn": "arn:aws:iam::{{ must_env `AWS_ACCOUNT_ID` }}:role/shumoku-task-exec-role",
+  "taskRoleArn": "arn:aws:iam::{{ must_env `AWS_ACCOUNT_ID` }}:role/shumoku-task-role",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "volumes": [
+    {
+      "name": "shumoku-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "{{ must_env `EFS_FILE_SYSTEM_ID` }}",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "{{ must_env `EFS_ACCESS_POINT_ID` }}",
+          "iam": "DISABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "shumoku",
+      "image": "{{ must_env `IMAGE_URI` }}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8080" },
+        { "name": "HOST", "value": "0.0.0.0" },
+        { "name": "DATA_DIR", "value": "/data" }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "shumoku-data",
+          "containerPath": "/data"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/shumoku",
+          "awslogs-region": "{{ must_env `AWS_REGION` }}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8080/api/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 10
+      },
+      "linuxParameters": {
+        "initProcessEnabled": true
+      }
+    }
+  ]
+}
